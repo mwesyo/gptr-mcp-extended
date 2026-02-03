@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
 from gpt_researcher import GPTResearcher
+from gpt_researcher.utils.enum import ReportType
 
 # Load environment variables
 load_dotenv()
@@ -44,6 +45,10 @@ mcp = FastMCP(
 # Initialize researchers dictionary
 if not hasattr(mcp, "researchers"):
     mcp.researchers = {}
+
+# Simple in-memory progress tracking keyed by research_id
+if not hasattr(mcp, "research_status"):
+    mcp.research_status = {}
 
 
 @mcp.resource("research://{topic}")
@@ -107,6 +112,12 @@ async def deep_research(query: str) -> Dict[str, Any]:
     
     # Generate a unique ID for this research session
     research_id = str(uuid.uuid4())
+    mcp.research_status[research_id] = {
+        "status": "running",
+        "query": query,
+        "progress": 0.0,
+        "message": "Starting research"
+    }
     
     # Initialize GPT Researcher
     researcher = GPTResearcher(query)
@@ -114,6 +125,11 @@ async def deep_research(query: str) -> Dict[str, Any]:
     # Start research
     try:
         await researcher.conduct_research()
+        mcp.research_status[research_id].update({
+            "status": "completed",
+            "progress": 100.0,
+            "message": "Research completed"
+        })
         mcp.researchers[research_id] = researcher
         logger.info(f"Research completed for ID: {research_id}")
         
@@ -134,7 +150,100 @@ async def deep_research(query: str) -> Dict[str, Any]:
             "source_urls": source_urls
         })
     except Exception as e:
+        mcp.research_status[research_id].update({
+            "status": "error",
+            "progress": 0.0,
+            "message": str(e)
+        })
         return handle_exception(e, "Research")
+
+
+@mcp.tool()
+async def source_research(
+    query: str,
+    deep: bool = False,
+    deep_breadth: Optional[int] = None,
+    deep_depth: Optional[int] = None,
+    deep_concurrency: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Conduct research focused on identifying sources only (resource report).
+    Returns sources and URLs without generating a narrative report.
+    """
+    logger.info(f"Conducting source-only research on query: {query}...")
+
+    research_id = str(uuid.uuid4())
+    mcp.research_status[research_id] = {
+        "status": "running",
+        "query": query,
+        "progress": 0.0,
+        "message": "Starting source research"
+    }
+    if deep:
+        if deep_breadth is not None:
+            os.environ["DEEP_RESEARCH_BREADTH"] = str(deep_breadth)
+        if deep_depth is not None:
+            os.environ["DEEP_RESEARCH_DEPTH"] = str(deep_depth)
+        if deep_concurrency is not None:
+            os.environ["DEEP_RESEARCH_CONCURRENCY"] = str(deep_concurrency)
+        researcher = GPTResearcher(query, report_type=ReportType.DeepResearch.value)
+    else:
+        researcher = GPTResearcher(query, report_type=ReportType.ResourceReport.value)
+
+    try:
+        if deep:
+            def _progress(p):
+                total = max(1, getattr(p, "total_queries", 0))
+                completed = getattr(p, "completed_queries", 0)
+                current = getattr(p, "current_query", "")
+                progress = min(99.0, (completed / total) * 100.0)
+                mcp.research_status[research_id].update({
+                    "progress": progress,
+                    "message": current or "Deep research in progress"
+                })
+
+            await researcher.conduct_research(on_progress=_progress)
+        else:
+            await researcher.conduct_research()
+        mcp.research_status[research_id].update({
+            "status": "completed",
+            "progress": 100.0,
+            "message": "Source research completed"
+        })
+        mcp.researchers[research_id] = researcher
+        logger.info(f"Source research completed for ID: {research_id}")
+
+        sources = researcher.get_research_sources()
+        source_urls = researcher.get_source_urls()
+        context = researcher.get_research_context()
+
+        store_research_results(query, context, sources, source_urls)
+
+        return create_success_response({
+            "research_id": research_id,
+            "query": query,
+            "source_count": len(sources),
+            "sources": format_sources_for_response(sources),
+            "source_urls": source_urls
+        })
+    except Exception as e:
+        mcp.research_status[research_id].update({
+            "status": "error",
+            "progress": 0.0,
+            "message": str(e)
+        })
+        return handle_exception(e, "Source research")
+
+
+@mcp.tool()
+async def get_research_status(research_id: str) -> Dict[str, Any]:
+    """
+    Return status/progress for a research_id.
+    """
+    status = mcp.research_status.get(research_id)
+    if not status:
+        return handle_exception(ValueError("Unknown research_id"), "Status")
+    return create_success_response(status)
 
 
 @mcp.tool()
