@@ -37,6 +37,17 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+TAVILY_MAX_QUERY_CHARS = int(os.getenv("TAVILY_MAX_QUERY_CHARS", "800"))
+
+
+def _truncate_tavily_query(query: str) -> str:
+    if not query:
+        return query
+    if len(query) <= TAVILY_MAX_QUERY_CHARS:
+        return query
+    trimmed = query[:TAVILY_MAX_QUERY_CHARS].rsplit(" ", 1)[0]
+    return trimmed if trimmed else query[:TAVILY_MAX_QUERY_CHARS]
+
 # Initialize FastMCP server
 mcp = FastMCP(
     name="GPT Researcher"
@@ -120,7 +131,8 @@ async def deep_research(query: str) -> Dict[str, Any]:
     }
     
     # Initialize GPT Researcher
-    researcher = GPTResearcher(query)
+    safe_query = _truncate_tavily_query(query)
+    researcher = GPTResearcher(safe_query)
     
     # Start research
     try:
@@ -170,7 +182,8 @@ async def source_research(
     Conduct research focused on identifying sources only (resource report).
     Returns sources and URLs without generating a narrative report.
     """
-    logger.info(f"Conducting source-only research on query: {query}...")
+    safe_query = _truncate_tavily_query(query)
+    logger.info(f"Conducting source-only research on query: {safe_query}...")
 
     research_id = str(uuid.uuid4())
     mcp.research_status[research_id] = {
@@ -186,9 +199,9 @@ async def source_research(
             os.environ["DEEP_RESEARCH_DEPTH"] = str(deep_depth)
         if deep_concurrency is not None:
             os.environ["DEEP_RESEARCH_CONCURRENCY"] = str(deep_concurrency)
-        researcher = GPTResearcher(query, report_type=ReportType.DeepResearch.value)
+        researcher = GPTResearcher(safe_query, report_type=ReportType.DeepResearch.value)
     else:
-        researcher = GPTResearcher(query, report_type=ReportType.ResourceReport.value)
+        researcher = GPTResearcher(safe_query, report_type=ReportType.ResourceReport.value)
 
     try:
         if deep:
@@ -393,8 +406,8 @@ def run_server():
     # Determine transport based on environment
     transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
     
-    # Auto-detect Docker environment
-    if os.path.exists("/.dockerenv") or os.getenv("DOCKER_CONTAINER"):
+    # Auto-detect Docker environment (only if transport not explicitly set)
+    if (not os.getenv("MCP_TRANSPORT")) and (os.path.exists("/.dockerenv") or os.getenv("DOCKER_CONTAINER")):
         transport = "sse"
         logger.info("Docker environment detected, using SSE transport")
     
