@@ -6,7 +6,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MCP_TRANSPORT=sse
+      - MCP_TRANSPORT=streamable_http
       - DOCKER_CONTAINER=true
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
