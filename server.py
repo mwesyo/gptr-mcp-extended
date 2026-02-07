@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
+from gpt_researcher.retrievers.tavily import tavily_search
 from gpt_researcher import GPTResearcher
 from gpt_researcher.utils.enum import ReportType
 
@@ -47,6 +48,45 @@ def _truncate_tavily_query(query: str) -> str:
         return query
     trimmed = query[:TAVILY_MAX_QUERY_CHARS].rsplit(" ", 1)[0]
     return trimmed if trimmed else query[:TAVILY_MAX_QUERY_CHARS]
+
+
+def _patch_tavily_truncation():
+    original_search = tavily_search.TavilySearch._search
+
+    def _search_with_truncation(
+        self,
+        query: str,
+        search_depth: str = "basic",
+        topic: str = "general",
+        days: int = 2,
+        max_results: int = 10,
+        include_domains=None,
+        exclude_domains=None,
+        include_answer: bool = False,
+        include_raw_content: bool = False,
+        include_images: bool = False,
+        use_cache: bool = True,
+    ):
+        safe_query = _truncate_tavily_query(query)
+        return original_search(
+            self,
+            safe_query,
+            search_depth=search_depth,
+            topic=topic,
+            days=days,
+            max_results=max_results,
+            include_domains=include_domains,
+            exclude_domains=exclude_domains,
+            include_answer=include_answer,
+            include_raw_content=include_raw_content,
+            include_images=include_images,
+            use_cache=use_cache,
+        )
+
+    tavily_search.TavilySearch._search = _search_with_truncation
+
+
+_patch_tavily_truncation()
 
 # Initialize FastMCP server
 mcp = FastMCP(
